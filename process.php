@@ -1,61 +1,64 @@
 <?php
-include 'config.php';
+include 'config/config.php';
 
-// Fetch kriteria data
-$kriteria = $conn->query("SELECT * FROM kriteria");
-$alternatif = $conn->query("SELECT * FROM alternatif");
-
-// Prepare matrices
-$matrix = [];
-$bobot = [];
-$tipe = [];
-
-// Store bobot dan tipe kriteria
-while ($row = $kriteria->fetch_assoc()) {
-    $bobot[$row['id']] = $row['bobot'];
-    $tipe[$row['id']] = $row['tipe'];
+// Langkah 1: Ambil data kriteria, bobot, dan tipe
+$kriteria = [];
+$result = $conn->query("SELECT * FROM kriteria");
+while ($row = $result->fetch_assoc()) {
+    $kriteria[] = $row;
 }
 
-// Fetch nilai alternatif
-$nilai = $conn->query("SELECT * FROM nilai");
-
-// Build matrix
-while ($row = $nilai->fetch_assoc()) {
-    $matrix[$row['alternatif_id']][$row['kriteria_id']] = $row['nilai'];
+// Langkah 2: Ambil data nilai alternatif
+$alternatif = [];
+$nilaiAlternatif = [];
+$result = $conn->query("SELECT na.alternatif_id, na.kriteria_id, na.nilai, a.nama_alternatif 
+                        FROM nilai na
+                        JOIN alternatif a ON na.alternatif_id = a.id");
+while ($row = $result->fetch_assoc()) {
+    $alternatif[$row['alternatif_id']] = $row['nama_alternatif'];
+    $nilaiAlternatif[$row['alternatif_id']][$row['kriteria_id']] = $row['nilai'];
 }
 
-// Normalisasi
-$normalized = [];
-foreach ($matrix as $alt_id => $criteria) {
-    foreach ($criteria as $crit_id => $value) {
-        if ($tipe[$crit_id] == 'benefit') {
-            $max = max(array_column(array_map(null, $matrix), $crit_id));
-            $normalized[$alt_id][$crit_id] = $value / $max;
-        } elseif ($tipe[$crit_id] == 'cost') {
-            $min = min(array_column(array_map(null, $matrix), $crit_id));
-            $normalized[$alt_id][$crit_id] = $min / $value;
+// Langkah 3: Normalisasi data
+$normalisasi = [];
+foreach ($kriteria as $k) {
+    $kriteriaId = $k['id'];
+    $tipe = $k['tipe'];
+    $columnValues = array_column($nilaiAlternatif, $kriteriaId);
+
+    foreach ($nilaiAlternatif as $altId => $values) {
+        if ($tipe === 'benefit') {
+            $normalisasi[$altId][$kriteriaId] = $values[$kriteriaId] / max($columnValues);
+        } else { // cost
+            $normalisasi[$altId][$kriteriaId] = min($columnValues) / $values[$kriteriaId];
         }
     }
 }
 
-// Menghitung skor preferensi
-$scores = [];
-foreach ($normalized as $alt_id => $criteria) {
-    $scores[$alt_id] = 0;
-    foreach ($criteria as $crit_id => $value) {
-        $scores[$alt_id] += $value * $bobot[$crit_id];
+// Langkah 4: Hitung skor preferensi
+$skor = [];
+foreach ($normalisasi as $altId => $values) {
+    $total = 0;
+    foreach ($kriteria as $k) {
+        $kriteriaId = $k['id'];
+        $bobot = $k['bobot'];
+        $total += $values[$kriteriaId] * $bobot;
     }
+    $skor[$altId] = $total;
 }
 
-// Urutkan skor
-arsort($scores);
+// Langkah 5: Urutkan hasil berdasarkan skor tertinggi
+arsort($skor);
 
-// Tampilkan hasil
-echo "<h1>Hasil Perhitungan SAW</h1>";
-echo "<table border='1' cellpadding='10' cellspacing='0'>";
-echo "<tr><th>Alternatif</th><th>Skor</th></tr>";
-foreach ($scores as $alt_id => $score) {
-    $alt_name = $conn->query("SELECT nama FROM alternatif WHERE id = $alt_id")->fetch_assoc()['nama'];
-    echo "<tr><td>{$alt_name}</td><td>{$score}</td></tr>";
+// Kembalikan hasil
+$response = [];
+foreach ($skor as $altId => $total) {
+    $response[] = [
+        'nama_alternatif' => $alternatif[$altId],
+        'skor' => round($total, 2),
+    ];
 }
-echo "</table>";
+
+// Kirim hasil sebagai JSON
+header('Content-Type: application/json');
+echo json_encode($response);
